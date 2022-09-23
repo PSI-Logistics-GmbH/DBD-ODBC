@@ -1341,7 +1341,7 @@ batches of parameters are sent to the database in one go. However,
 the required support in some ODBC drivers is a little sketchy and there
 is no way for DBD::ODBC to ascertain this until it is too late.
 
-Please read the documentation on L<execute_array> and L<execute_for_fetch>
+Please read the documentation on L<execute_for_fetch and execute_array>
 which details subtle differences in DBD::ODBC's implementation compared
 with using DBI's default implementation. If these difference cause you
 a problem you can set odbc_array_operations to false and DBD::ODBC

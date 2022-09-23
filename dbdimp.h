@@ -8,7 +8,6 @@
  *
  * You may distribute under the terms of either the GNU General Public
  * License or the Artistic License, as specified in the Perl README file.
- *
  */
 
 /* some constants for driver specific types */
@@ -100,13 +99,13 @@ struct imp_dbh_st {
      */
     enum {
         DT_DONT_CARE,
-        DT_SQL_SERVER,                          /* SQLSRV32.DLL */
+        DT_SQL_SERVER,                  /* SQLSRV32.DLL */
         DT_SQL_SERVER_NATIVE_CLIENT,    /* sqlncli10.dll | SQLNCLI.DLL */
-        DT_MS_ACCESS_JET,                          /* odbcjt32.dll */
-        DT_MS_ACCESS_ACE,                          /* ACEODBC.DLL */
-        DT_ES_OOB,                                 /* Easysoft OOB */
-        DT_FIREBIRD,                                /* Firebird OdbcFb */
-        DT_FREETDS                                 /* freeTDS libtdsodbc.so */
+        DT_MS_ACCESS_JET,               /* odbcjt32.dll */
+        DT_MS_ACCESS_ACE,               /* ACEODBC.DLL */
+        DT_ES_OOB,                      /* Easysoft OOB */
+        DT_FIREBIRD,                    /* Firebird OdbcFb */
+        DT_FREETDS                      /* freeTDS libtdsodbc.so */
     } driver_type;
     char odbc_driver_name[80];
     char odbc_driver_version[20];
@@ -259,38 +258,38 @@ struct phs_st {             /* scalar placeholder */
 
 /* These defines avoid name clashes for multiple statically linked DBD's        */
 
-#define dbd_init		odbc_init
-#define dbd_db_login		odbc_db_login
-#define dbd_db_login6		odbc_db_login6
+#define dbd_init        odbc_init
+#define dbd_db_login    odbc_db_login
+#define dbd_db_login6   odbc_db_login6
 #define dbd_data_sources dbd_data_sources
 /*
  * Not defined by DBI
- * #define dbd_db_do		odbc_db_do
+#define dbd_db_do               odbc_db_do
  */
 #define dbd_db_login6_sv        odbc_db_login6_sv
-#define dbd_db_commit		odbc_db_commit
-#define dbd_db_rollback		odbc_db_rollback
-#define dbd_db_disconnect	odbc_db_disconnect
-#define dbd_db_destroy		odbc_db_destroy
-#define dbd_db_STORE_attrib	odbc_db_STORE_attrib
-#define dbd_db_FETCH_attrib	odbc_db_FETCH_attrib
-#define dbd_st_prepare		odbc_st_prepare
+#define dbd_db_commit           odbc_db_commit
+#define dbd_db_rollback         odbc_db_rollback
+#define dbd_db_disconnect       odbc_db_disconnect
+#define dbd_db_destroy          odbc_db_destroy
+#define dbd_db_STORE_attrib     odbc_db_STORE_attrib
+#define dbd_db_FETCH_attrib     odbc_db_FETCH_attrib
+#define dbd_st_prepare          odbc_st_prepare
 #define dbd_st_prepare_sv       odbc_st_prepare_sv
-/*#define dbd_st_rows		odbc_st_rows*/
-#define dbd_st_execute		odbc_st_execute
-#define dbd_st_execute_iv   odbc_st_execute_iv
-#define dbd_st_fetch		odbc_st_fetch
-#define dbd_st_finish		odbc_st_finish
-#define dbd_st_destroy		odbc_st_destroy
-#define dbd_st_blob_read	odbc_st_blob_read
-#define dbd_st_STORE_attrib	odbc_st_STORE_attrib
-#define dbd_st_FETCH_attrib	odbc_st_FETCH_attrib
-#define dbd_describe		odbc_describe
-#define dbd_bind_ph		odbc_bind_ph
-#define dbd_error		odbc_error
-#define dbd_discon_all		odbc_discon_all
-#define dbd_st_tables		odbc_st_tables
-#define dbd_st_primary_keys	odbc_st_primary_keys
-#define dbd_db_execdirect	odbc_db_execdirect
-#define dbd_st_bind_col     	odbc_st_bind_col
+/*efine dbd_st_rows             odbc_st_rows*/
+#define dbd_st_execute          odbc_st_execute
+#define dbd_st_execute_iv       odbc_st_execute_iv
+#define dbd_st_fetch            odbc_st_fetch
+#define dbd_st_finish           odbc_st_finish
+#define dbd_st_destroy          odbc_st_destroy
+#define dbd_st_blob_read        odbc_st_blob_read
+#define dbd_st_STORE_attrib     odbc_st_STORE_attrib
+#define dbd_st_FETCH_attrib     odbc_st_FETCH_attrib
+#define dbd_describe            odbc_describe
+#define dbd_bind_ph             odbc_bind_ph
+#define dbd_error               odbc_error
+#define dbd_discon_all          odbc_discon_all
+#define dbd_st_tables           odbc_st_tables
+#define dbd_st_primary_keys     odbc_st_primary_keys
+#define dbd_db_execdirect       odbc_db_execdirect
+#define dbd_st_bind_col         odbc_st_bind_col
 /* end */

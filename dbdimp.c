@@ -6,7 +6,6 @@
  *
  * You may distribute under the terms of either the GNU General Public
  * License or the Artistic License, as specified in the Perl README file.
- *
  */
 
 /*
@@ -29,11 +28,11 @@
  *   http://perldoc.perl.org/perlguts.html#Formatted-Printing-of-IVs,-UVs,-and-NVs
  *   http://cpansearch.perl.org/src/RURBAN/illguts-0.44/index.html
  * Internal replacements for standard C library functions:
- * http://perldoc.perl.org/perlclib.html
- * http://search.cpan.org/dist/Devel-PPPort/PPPort.pm
+ *   http://perldoc.perl.org/perlclib.html
+ *   http://search.cpan.org/dist/Devel-PPPort/PPPort.pm
  *
  * MS ODBC 64 bit:
- * http://msdn.microsoft.com/en-us/library/ms716287%28v=vs.85%29.aspx
+ *   http://msdn.microsoft.com/en-us/library/ms716287%28v=vs.85%29.aspx
  */
 #include <limits.h>
 
@@ -71,21 +70,21 @@
 
 /* combined DBI trace connection and encoding flags with DBD::ODBC ones */
 /* Historically DBD::ODBC had 2 flags before they were made DBI ones */
-#define UNICODE_TRACING (0x02000000|DBIf_TRACE_ENC|DBIf_TRACE_DBD)
+#define UNICODE_TRACING    (0x02000000|DBIf_TRACE_ENC|DBIf_TRACE_DBD)
 #define CONNECTION_TRACING (0x04000000|DBIf_TRACE_CON|DBIf_TRACE_DBD)
 #define DBD_TRACING DBIf_TRACE_DBD
 #define TRANSACTION_TRACING (DBIf_TRACE_TXN|DBIf_TRACE_DBD)
-#define SQL_TRACING (DBIf_TRACE_SQL|DBIf_TRACE_DBD)
+#define SQL_TRACING         (DBIf_TRACE_SQL|DBIf_TRACE_DBD)
 
-#define TRACE0(a,b) PerlIO_printf(DBIc_LOGPIO(a), (b))
-#define TRACE1(a,b,c) PerlIO_printf(DBIc_LOGPIO(a), (b), (c))
-#define TRACE2(a,b,c,d) PerlIO_printf(DBIc_LOGPIO(a), (b), (c), (d))
+#define TRACE0(a,b)       PerlIO_printf(DBIc_LOGPIO(a), (b))
+#define TRACE1(a,b,c)     PerlIO_printf(DBIc_LOGPIO(a), (b), (c))
+#define TRACE2(a,b,c,d)   PerlIO_printf(DBIc_LOGPIO(a), (b), (c), (d))
 #define TRACE3(a,b,c,d,e) PerlIO_printf(DBIc_LOGPIO(a), (b), (c), (d), (e))
 
 /* An error return reserved for our internal use and should not clash with
-   any ODBC error codes like SQL_ERROR, SQL_INVALID_HANDLE etc.
-   It is used so we can call dbd_error but indicate there is no point in
-   calling SQLError as the error is internal */
+ * any ODBC error codes like SQL_ERROR, SQL_INVALID_HANDLE etc.
+ * It is used so we can call dbd_error but indicate there is no point in
+ * calling SQLError as the error is internal */
 #define DBDODBC_INTERNAL_ERROR -999
 
 static int taf_callback_wrapper (
@@ -104,11 +103,11 @@ static int post_connect(pTHX_ SV *dbh, imp_dbh_t *imp_dbh, SV *attr);
 static int set_odbc_version(pTHX_ SV *dbh, imp_dbh_t *imp_dbh, SV* attr);
 static const char *S_SqlTypeToString (SWORD sqltype);
 static const char *S_SqlCTypeToString (SWORD sqltype);
-static const char *cSqlTables = "SQLTables(%s,%s,%s,%s)";
+static const char *cSqlTables      = "SQLTables(%s,%s,%s,%s)";
 static const char *cSqlPrimaryKeys = "SQLPrimaryKeys(%s,%s,%s)";
-static const char *cSqlStatistics = "SQLStatistics(%s,%s,%s,%d,%d)";
+static const char *cSqlStatistics  = "SQLStatistics(%s,%s,%s,%d,%d)";
 static const char *cSqlForeignKeys = "SQLForeignKeys(%s,%s,%s,%s,%s,%s)";
-static const char *cSqlColumns = "SQLColumns(%s,%s,%s,%s)";
+static const char *cSqlColumns     = "SQLColumns(%s,%s,%s,%s)";
 static const char *cSqlGetTypeInfo = "SQLGetTypeInfo(%d)";
 static SQLRETURN bind_columns(SV *h, imp_sth_t *imp_sth);
 static void AllODBCErrors(HENV henv, HDBC hdbc, HSTMT hstmt, int output,
@@ -121,7 +120,7 @@ static int  rebind_param(pTHX_ SV *sth, imp_sth_t *imp_sth, imp_dbh_t *imp_dbh, 
 static void get_param_type(SV *sth, imp_sth_t *imp_sth, imp_dbh_t *imp_dbh, phs_t *phs);
 static void check_for_unicode_param(imp_sth_t *imp_sth, phs_t *phs);
 
-/* Function to get the console window handle which we may use in SQLDriverConnect  on WIndows */
+/* Function to get the console window handle which we may use in SQLDriverConnect  on Windows */
 #ifdef WIN32
 static HWND GetConsoleHwnd(void);
 #endif
@@ -145,9 +144,9 @@ IV dbd_st_execute_iv(SV *sth, imp_sth_t *imp_sth);
 #define ODBC_ERR_HANDLER               0x8335
 #define ODBC_ROWCACHESIZE              0x8336
 #define ODBC_ROWSINCACHE               0x8337
-#define ODBC_FORCE_REBIND	       0x8338
+#define ODBC_FORCE_REBIND              0x8338
 #define ODBC_EXEC_DIRECT               0x8339
-#define ODBC_VERSION		       0x833A
+#define ODBC_VERSION                   0x833A
 #define ODBC_CURSORTYPE                0x833B
 #define ODBC_QUERY_TIMEOUT             0x833C
 #define ODBC_HAS_UNICODE               0x833D
@@ -431,6 +430,7 @@ SQLLEN dbd_db_execdirect(SV *dbh,
    SQLRETURN ret;                               /* SQLxxx return value */
    SQLLEN rows;
    SQLHSTMT stmt;
+   RETCODE rc;
    int dbh_active;
 
    if ((dbh_active = check_connection_active(aTHX_ dbh)) == 0) return 0;
@@ -443,9 +443,9 @@ SQLLEN dbd_db_execdirect(SV *dbh,
 
    /* if odbc_query_timeout has been set, set it in the driver */
    if (imp_dbh->odbc_query_timeout != -1) {
-      ret = odbc_set_query_timeout(imp_dbh, stmt, imp_dbh->odbc_query_timeout);
-      if (!SQL_SUCCEEDED(ret)) {
-          dbd_error(dbh, ret, "execdirect set_query_timeout");
+      rc = odbc_set_query_timeout(imp_dbh, stmt, imp_dbh->odbc_query_timeout);
+      if (!SQL_SUCCEEDED(rc)) {
+          dbd_error(dbh, rc, "execdirect set_query_timeout");
       }
       /* don't fail if the query timeout can't be set. */
    }
@@ -796,7 +796,7 @@ int dbd_db_login6_sv(
             * error code because the SQLConnect call could hide the
             * real problem.
             */
-           dbd_error(dbh, rc, "db_login6sv/SQLDriverConnectW");
+           dbd_error(dbh, rc, "db_login6_sv/SQLDriverConnectW");
            SQLFreeHandle(SQL_HANDLE_DBC, imp_dbh->hdbc);
            if (imp_drh->connects == 0) {
                SQLFreeHandle(SQL_HANDLE_ENV, imp_drh->henv);
@@ -843,7 +843,7 @@ int dbd_db_login6_sv(
                         wpwdp, pwd_len);
    }
    if (!SQL_SUCCEEDED(rc)) {
-      dbd_error(dbh, rc, "db_login6sv/SQLConnectW");
+      dbd_error(dbh, rc, "db_login6_sv/SQLConnectW");
       SQLFreeHandle(SQL_HANDLE_DBC, imp_dbh->hdbc);
       imp_dbh->hdbc = SQL_NULL_HDBC;
       if (imp_drh->connects == 0) {
@@ -853,7 +853,7 @@ int dbd_db_login6_sv(
       }
       return 0;
    } else if (rc == SQL_SUCCESS_WITH_INFO) {
-       dbd_error(dbh, rc, "db_login6sv/SQLConnectW");
+       dbd_error(dbh, rc, "db_login6_sv/SQLConnectW");
    }
 
    if (post_connect(aTHX_ dbh, imp_dbh, attr) != 1) return 0;
@@ -1088,7 +1088,7 @@ int dbd_db_login6(
 	  * error code because the SQLConnect call could hide the
 	  * real problem.
 	  */
-	 dbd_error(dbh, rc, "db_login/SQLConnect");
+	 dbd_error(dbh, rc, "db_login6/SQLDriverConnect");
 	 SQLFreeHandle(SQL_HANDLE_DBC, imp_dbh->hdbc);
 	 if (imp_drh->connects == 0) {
              SQLFreeHandle(SQL_HANDLE_ENV, imp_drh->henv);
@@ -1487,7 +1487,7 @@ void dbd_error(SV *h, RETCODE err_rc, char *what)
     }
     /*
      * If status is SQL_SUCCESS, there's no error, so we can just return.
-     * There may be status or other non-error messsages though.
+     * There may be status or other non-error messages though.
      * We want those messages if the debug level is set to at least 3.
      * If an error handler is installed, let it decide what messages
      * should or shouldn't be reported.
@@ -2271,7 +2271,7 @@ int odbc_st_prepare_sv(
     * we need to set the SQL_ATTR_QUERY_TIMEOUT
     */
    if (imp_sth->odbc_query_timeout != -1){
-       odbc_set_query_timeout(imp_dbh, imp_sth->hstmt, imp_sth->odbc_query_timeout);
+       rc = odbc_set_query_timeout(imp_dbh, imp_sth->hstmt, imp_sth->odbc_query_timeout);
        if (!SQL_SUCCEEDED(rc)) {
            dbd_error(sth, rc, "set_query_timeout");
        }
@@ -3399,8 +3399,8 @@ AV *dbd_st_fetch(SV *sth, imp_sth_t *imp_sth)
 #endif
                 dbd_error(
                     sth, DBDODBC_INTERNAL_ERROR,
-                    "st_fetch/SQLFetch (long truncated DBI attribute LongTruncOk "
-                    "not set and/or LongReadLen too small)");
+                    "st_fetch/SQLFetch (long truncated DBI attribute LongTruncOk"
+                    " not set and/or LongReadLen too small)");
                 return Nullav;
             }
             /* LongTruncOk true, just ensure perl has the right length
@@ -4805,10 +4805,6 @@ int dbd_db_STORE_attrib(SV *dbh, imp_dbh_t *imp_dbh, SV *keysv, SV *valuesv)
 
       case ODBC_ARRAY_OPERATIONS:
         bSetSQLConnectionOption = FALSE;
-        /*
-         * set value to ignore placeholders.  Will affect all
-         * statements from here on.
-         */
         imp_dbh->odbc_array_operations = SvTRUE(valuesv);
         break;
 
@@ -5591,21 +5587,23 @@ SV *dbd_st_FETCH_attrib(SV *sth, imp_sth_t *imp_sth, SV *keysv)
          break;
       }
       case 19: /* odbc_column_display_size */
-        retsv = newSViv(imp_sth->odbc_column_display_size);
-        break;
+         retsv = newSViv(imp_sth->odbc_column_display_size);
+         break;
       case 20: /* odbc_force_bind_type */
-	 retsv = newSViv(imp_sth->odbc_force_bind_type);
-	 break;
+         retsv = newSViv(imp_sth->odbc_force_bind_type);
+         break;
       case 21: /* odbc_batch_size */
-        retsv = newSViv(imp_sth->odbc_batch_size);
-        break;
+         retsv = newSViv(imp_sth->odbc_batch_size);
+         break;
       case 22: /* odbc_array_operations */
-	 retsv = newSViv(imp_sth->odbc_array_operations);
-	 break;
+         retsv = newSViv(imp_sth->odbc_array_operations);
+         break;
       default:
-	 return Nullsv;
+         return Nullsv;
    }
-   return sv_2mortal(retsv);
+
+   retsv = sv_2mortal(retsv);
+   return retsv;
 }
 
 
@@ -6522,7 +6520,6 @@ static int check_connection_active(pTHX_ SV *h)
         return 0;
     }
     return 1;
-
 }
 
 
@@ -7027,7 +7024,7 @@ static   HWND GetConsoleHwnd(void)
 #define MY_BUFSIZE 1024 /* Buffer size for console window titles. */
   HWND hwndFound;         /* This is what is returned to the caller. */
   char pszNewWindowTitle[MY_BUFSIZE]; /* Contains fabricated WindowTitle. */
-  char pszOldWindowTitle[MY_BUFSIZE]; /* Contains original  WindowTitle */
+  char pszOldWindowTitle[MY_BUFSIZE]; /* Contains original   WindowTitle */
 
   /* Fetch current window title. */
   GetConsoleTitle(pszOldWindowTitle, MY_BUFSIZE);
@@ -7405,7 +7402,7 @@ IV odbc_st_execute_for_fetch(
     /* SQLExecute may fail with SQL_ERROR in which case we have a serious
      * problem but usually it fails for a row of parameters with
      * SQL_SUCCESS_WITH_INFO - in the latter case the parameter status
-     * array will indicate and error for this row and we'll pick it up later */
+     * array will indicate an error for this row and we'll pick it up later */
     if (DBIc_TRACE(imp_sth, DBD_TRACING, 0, 4))
       TRACE1(imp_sth, "    SQLExecute=%d\n", rc);
     if (!SQL_SUCCEEDED(rc)) {
@@ -7441,7 +7438,7 @@ IV odbc_st_execute_for_fetch(
            processed N rows and we step past N, the values could be rubbish -
            the driver probably hasn't even written them. In particular, if
            we look at param status array after params processed the values
-           will probably be junk (randon values in the malloced data) and it
+           will probably be junk (random values in the malloced data) and it
            will lead us to think they are not successful - assuming they are
            not 0 = SQL_PARAM_SUCCESS */
         for (row = 0; row < count; row++) {
@@ -7548,12 +7545,12 @@ IV odbc_st_execute_for_fetch(
  * get_row_diag
  *
  * When we are doing execute_for_fetch/execute_array we bind rows of
- * parameters. When one of more fail we have a list of diagnostics and
+ * parameters. When one or more fail we have a list of diagnostics and
  * the driver manager may reorder them in severity order. Also, each row
  * in error could generate multiple error diagnostics e.g.,
  * attempting to insert too much data generates:
  * diag 1 22001, 2290136, [Microsoft][ODBC SQL Server Driver][SQL Server]String or binary data would be truncated.
- * diag 2 01000, 2290136, [Microsoft][ODBC SQL Server Driver][SQL Server]The statem ent has been terminated.
+ * diag 2 01000, 2290136, [Microsoft][ODBC SQL Server Driver][SQL Server]The statement has been terminated.
  *
  * Fortunately for us, each diagnostic contains the row number the error relates
  * to (in working drivers). This function is passed the row we have detected
@@ -7577,7 +7574,6 @@ static int get_row_diag(SQLSMALLINT recno,
     if (DBIc_TRACE(imp_sth, DBD_TRACING, 0, 3))
         TRACE1(imp_sth, "    +get_row_diag for row %d\n", recno);
 
-    /*printf("get_row_diag %d\n", recno);*/
     /*
       SQLRETURN return_code;
 
@@ -7598,7 +7594,6 @@ static int get_row_diag(SQLSMALLINT recno,
             PerlIO_printf(DBIc_LOGPIO(imp_sth),
                           "    diag %d %s, %ld, %s\n",
                           i, state, (long)*native, msg);
-        /*printf("diag %d %s, %ld, %s\n", i, state, native, msg);*/
         if (max_msg < 100) {
             croak("Come on, code needs some space to put the diag message");
         }
