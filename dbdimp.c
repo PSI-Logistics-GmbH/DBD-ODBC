@@ -81,6 +81,10 @@
 #define TRACE2(a,b,c,d)   PerlIO_printf(DBIc_LOGPIO(a), (b), (c), (d))
 #define TRACE3(a,b,c,d,e) PerlIO_printf(DBIc_LOGPIO(a), (b), (c), (d), (e))
 
+#define DBI_ERR_i  Nullch
+#define DBI_INFO_c ""     /* information state */
+#define DBI_WARN_c "0"    /* warning state */
+
 /* An error return reserved for our internal use and should not clash with
  * any ODBC error codes like SQL_ERROR, SQL_INVALID_HANDLE etc.
  * It is used so we can call dbd_error but indicate there is no point in
@@ -412,8 +416,10 @@ int odbc_discon_all(SV *drh,
    dTHX;
    /* The disconnect_all concept is flawed and needs more work */
    if (!PL_dirty && !SvTRUE(get_sv("DBI::PERL_ENDING",0))) {
-       DBIh_SET_ERR_CHAR(drh, (imp_xxh_t*)imp_drh, Nullch, 1,
-                         "disconnect_all not implemented", Nullch, Nullch);
+       DBIh_SET_ERR_CHAR( drh, (imp_xxh_t*)imp_drh,
+                          DBI_ERR_i, 1,
+                          "disconnect_all not implemented", Nullch,
+                          "discon_all" );
       return FALSE;
    }
    return FALSE;
@@ -437,7 +443,7 @@ SQLLEN dbd_db_execdirect(SV *dbh,
 
    ret = SQLAllocHandle(SQL_HANDLE_STMT,  imp_dbh->hdbc, &stmt );
    if (!SQL_SUCCEEDED(ret)) {
-      dbd_error( dbh, ret, "Statement allocation error" );
+      dbd_error( dbh, ret, "db_execdirect/SQLAllocHandle(stmt)" );
       return(-2);
    }
 
@@ -445,7 +451,7 @@ SQLLEN dbd_db_execdirect(SV *dbh,
    if (imp_dbh->odbc_query_timeout != -1) {
       rc = odbc_set_query_timeout(imp_dbh, stmt, imp_dbh->odbc_query_timeout);
       if (!SQL_SUCCEEDED(rc)) {
-          dbd_error(dbh, rc, "execdirect set_query_timeout");
+          dbd_error(dbh, rc, "db_execdirect/set_query_timeout");
       }
       /* don't fail if the query timeout can't be set. */
    }
@@ -484,7 +490,7 @@ SQLLEN dbd_db_execdirect(SV *dbh,
    if (DBIc_TRACE(imp_dbh, DBD_TRACING, 0, 3))
       TRACE1(imp_dbh, "    SQLExecDirect = %d\n", ret);
    if (!SQL_SUCCEEDED(ret) && ret != SQL_NO_DATA) {
-      dbd_error2(dbh, ret, "Execute immediate failed",
+      dbd_error2(dbh, ret, "db_execdirect/SQLExecDirect",
                  imp_dbh->henv, imp_dbh->hdbc, stmt );
       rows = -2;                             /* error */
    } else {
@@ -492,18 +498,18 @@ SQLLEN dbd_db_execdirect(SV *dbh,
            rows = 0;
        }
        else if (ret != SQL_SUCCESS) {
-           dbd_error2(dbh, ret, "Execute immediate success with info",
+           dbd_error2(dbh, ret, "db_execdirect/SQLExecDirect_WITH_INFO",
                       imp_dbh->henv, imp_dbh->hdbc, stmt );
        }
        ret = SQLRowCount(stmt, &rows);
        if (!SQL_SUCCEEDED(ret)) {
-           dbd_error( dbh, ret, "SQLRowCount failed" );
+           dbd_error( dbh, ret, "db_execdirect/SQLRowCount" );
            rows = -1;
        }
    }
    ret = SQLFreeHandle(SQL_HANDLE_STMT,stmt);
    if (!SQL_SUCCEEDED(ret)) {
-      dbd_error2(dbh, ret, "Statement destruction error",
+      dbd_error2(dbh, ret, "db_execdirect/SQLFreeHandle",
                  imp_dbh->henv, imp_dbh->hdbc, stmt);
    }
 
@@ -1212,10 +1218,10 @@ int dbd_db_disconnect(SV *dbh, imp_dbh_t *imp_dbh)
            if (DBIc_TRACE(imp_dbh, TRANSACTION_TRACING, 0, 3))
                TRACE0(imp_dbh, "SQLDisconnect, Transaction in progress\n");
 
-           DBIh_SET_ERR_CHAR(
-               dbh, (imp_xxh_t*)imp_dbh, "0" /* warning state */, 1,
-               "Disconnect with transaction in progress - rolling back",
-               state, Nullch);
+           DBIh_SET_ERR_CHAR( dbh, (imp_xxh_t*)imp_dbh,
+                              DBI_WARN_c, 0,
+                              "Disconnect with transaction in progress - rolling back", state,
+                              "db_disconnect/SQLDisconnect-25000" );
            (void)dbd_db_rollback(dbh, imp_dbh);
            rc = SQLDisconnect(imp_dbh->hdbc);
        }
@@ -1290,6 +1296,51 @@ int dbd_db_rollback(SV *dbh, imp_dbh_t *imp_dbh)
 
 
 
+void dbd_error(SV *h, RETCODE err_rc, char *what)
+{
+    dTHX;
+    D_imp_xxh(h);
+
+    struct imp_dbh_st *imp_dbh = NULL;
+    struct imp_sth_st *imp_sth = NULL;
+    HSTMT hstmt = SQL_NULL_HSTMT;
+
+    switch(DBIc_TYPE(imp_xxh)) {
+      case DBIt_ST:
+        imp_sth = (struct imp_sth_st *)(imp_xxh);
+        imp_dbh = (struct imp_dbh_st *)(DBIc_PARENT_COM(imp_sth));
+        hstmt = imp_sth->hstmt;
+        break;
+      case DBIt_DB:
+        imp_dbh = (struct imp_dbh_st *)(imp_xxh);
+        break;
+      default:
+        croak("panic: dbd_error on bad handle type");
+    }
+    // The following idea was introduced 19.02.2004 with
+    // Revision: 2609b3ab1ed836aee610195327bc911a7b4df012
+    // , but was then undermined 05.02.2011 with
+    // Revision: f30ff7eade9b8f0fa95040a3314d89330ce07be4
+    // , since dbd_error2(. SQL_SUCCESS ....) then aborts immediately.
+    /*
+     * If status is SQL_SUCCESS, there's no error, so we can just return.
+     * There may be status or other non-error messages though.
+     * We want those messages if the debug level is set to at least 3.
+     * If an error handler is installed, let it decide what messages
+     * should or shouldn't be reported.
+     */
+    if ((err_rc == SQL_SUCCESS) && !DBIc_TRACE(imp_dbh, DBD_TRACING, 0, 3) &&
+        !imp_dbh->odbc_err_handler)
+        return;
+
+    dbd_error2(h, err_rc, what, imp_dbh->henv, imp_dbh->hdbc, hstmt);
+}
+
+
+
+/*------------------------------------------------------------
+empties entire ODBC error queue.
+------------------------------------------------------------*/
 void dbd_error2(
     SV *h,
     RETCODE err_rc,
@@ -1298,9 +1349,18 @@ void dbd_error2(
     HDBC hdbc,
     HSTMT hstmt)
 {
+    if (err_rc == SQL_SUCCESS) return;
+
     dTHX;
     D_imp_xxh(h);
     int error_found = 0;
+
+    if (DBIc_TRACE(imp_xxh, DBD_TRACING, 0, 4) && (err_rc != SQL_SUCCESS)) {
+        PerlIO_printf(
+            DBIc_LOGPIO(imp_xxh),
+            "    !!dbd_error2(err_rc=%d, what=%s, handles=(%p,%p,%p)\n",
+            err_rc, (what ? what : "null"), henv, hdbc, hstmt);
+    }
 
     /*
      * It's a shame to have to add all this stuff with imp_dbh and
@@ -1309,15 +1369,6 @@ void dbd_error2(
      */
     struct imp_dbh_st *imp_dbh = NULL;
     struct imp_sth_st *imp_sth = NULL;
-
-    if (err_rc == SQL_SUCCESS) return;
-
-    if (DBIc_TRACE(imp_xxh, DBD_TRACING, 0, 4) && (err_rc != SQL_SUCCESS)) {
-        PerlIO_printf(
-            DBIc_LOGPIO(imp_xxh),
-            "    !!dbd_error2(err_rc=%d, what=%s, handles=(%p,%p,%p)\n",
-            err_rc, (what ? what : "null"), henv, hdbc, hstmt);
-    }
 
     switch(DBIc_TYPE(imp_xxh)) {
       case DBIt_ST:
@@ -1345,7 +1396,7 @@ void dbd_error2(
 
         /* TBD: 3.0 update */
         /* It is important we check for DBDODBC_INTERNAL_ERROR first so if we issue
-	   an internal error AND there are ODBC diagnostics, ours come first */
+         * an internal error AND there are ODBC diagnostics, ours come first */
         while(err_rc == DBDODBC_INTERNAL_ERROR ||
               SQL_SUCCEEDED(rc=SQLError(
                                 henv, hdbc, hstmt,
@@ -1419,11 +1470,11 @@ void dbd_error2(
             strcat(ErrorMsg, sqlstate);
             strcat(ErrorMsg, ")");
             if (SQL_SUCCEEDED(err_rc)) {
-                DBIh_SET_ERR_CHAR(h, imp_xxh, "" /* information state */,
-                                  1, ErrorMsg, sqlstate, Nullch);
+                DBIh_SET_ERR_CHAR(h, imp_xxh, DBI_INFO_c,
+                                  1, ErrorMsg, sqlstate, what);
             } else {
-                DBIh_SET_ERR_CHAR(h, imp_xxh, Nullch, 1, ErrorMsg,
-                                  sqlstate, Nullch);
+                DBIh_SET_ERR_CHAR(h, imp_xxh, DBI_ERR_i,
+                                  1, ErrorMsg, sqlstate, what);
             }
             continue;
         }
@@ -1432,10 +1483,10 @@ void dbd_error2(
                 TRACE1(imp_dbh,
                        "    !!SQLError returned %d unexpectedly.\n", rc);
             if (!PL_dirty) {           /* not in global destruction */
-                DBIh_SET_ERR_CHAR(
-                    h, imp_xxh, Nullch, 1,
-                    "    Unable to fetch information about the error",
-                    "IM008", Nullch);
+                DBIh_SET_ERR_CHAR( h, imp_xxh,
+                                   DBI_ERR_i, 1,
+                                   "    Unable to fetch information about the error", "IM008",
+                                   what );
             }
         }
         /* climb up the tree each time round the loop		*/
@@ -1452,53 +1503,13 @@ void dbd_error2(
            to HY000 */
         if (DBIc_TRACE(imp_xxh, DBD_TRACING, 0, 3))
             TRACE1(imp_dbh, "    ** No error found %d **\n", err_rc);
-        DBIh_SET_ERR_CHAR(
-            h, imp_xxh, Nullch, 1,
-            "    Unable to fetch information about the error", "HY000", Nullch);
+        DBIh_SET_ERR_CHAR( h, imp_xxh,
+                           DBI_ERR_i, 1,
+                           "    Unable to fetch information about the error", "HY000",
+                           what );
     }
 
 }
-
-
-
-/*------------------------------------------------------------
-empties entire ODBC error queue.
-------------------------------------------------------------*/
-void dbd_error(SV *h, RETCODE err_rc, char *what)
-{
-    dTHX;
-    D_imp_xxh(h);
-
-    struct imp_dbh_st *imp_dbh = NULL;
-    struct imp_sth_st *imp_sth = NULL;
-    HSTMT hstmt = SQL_NULL_HSTMT;
-
-    switch(DBIc_TYPE(imp_xxh)) {
-      case DBIt_ST:
-        imp_sth = (struct imp_sth_st *)(imp_xxh);
-        imp_dbh = (struct imp_dbh_st *)(DBIc_PARENT_COM(imp_sth));
-        hstmt = imp_sth->hstmt;
-        break;
-      case DBIt_DB:
-        imp_dbh = (struct imp_dbh_st *)(imp_xxh);
-        break;
-      default:
-        croak("panic: dbd_error on bad handle type");
-    }
-    /*
-     * If status is SQL_SUCCESS, there's no error, so we can just return.
-     * There may be status or other non-error messages though.
-     * We want those messages if the debug level is set to at least 3.
-     * If an error handler is installed, let it decide what messages
-     * should or shouldn't be reported.
-     */
-    if ((err_rc == SQL_SUCCESS) && !DBIc_TRACE(imp_dbh, DBD_TRACING, 0, 3) &&
-        !imp_dbh->odbc_err_handler)
-        return;
-
-    dbd_error2(h, err_rc, what, imp_dbh->henv, imp_dbh->hdbc, hstmt);
-}
-
 
 
 
@@ -1895,7 +1906,7 @@ int dbd_st_primary_keys(
 
    rc = SQLAllocHandle(SQL_HANDLE_STMT, imp_dbh->hdbc, &imp_sth->hstmt);
    if (rc != SQL_SUCCESS) {
-      dbd_error(sth, rc, "odbc_db_primary_key_info/SQLAllocHandle(stmt)");
+      dbd_error(sth, rc, "st_primary_keys/SQLAllocHandle(stmt)");
       return 0;
    }
 
@@ -1924,7 +1935,7 @@ int dbd_st_primary_keys(
            "    SQLPrimaryKeys call: cat = %s, schema = %s, table = %s\n",
            XXSAFECHAR(catalog), XXSAFECHAR(schema), XXSAFECHAR(table));
 
-   dbd_error(sth, rc, "st_primary_key_info/SQLPrimaryKeys");
+   dbd_error(sth, rc, "st_primary_keys/SQLPrimaryKeys");
 
    if (!SQL_SUCCEEDED(rc)) {
       SQLFreeHandle(SQL_HANDLE_STMT,imp_sth->hstmt);
@@ -1964,7 +1975,7 @@ int dbd_st_statistics(
 
    rc = SQLAllocHandle(SQL_HANDLE_STMT, imp_dbh->hdbc, &imp_sth->hstmt);
    if (rc != SQL_SUCCESS) {
-      dbd_error(sth, rc, "odbc_db_primary_key_info/SQLAllocHandle(stmt)");
+      dbd_error(sth, rc, "st_statistics/SQLAllocHandle(stmt)");
       return 0;
    }
 
@@ -2273,7 +2284,7 @@ int odbc_st_prepare_sv(
    if (imp_sth->odbc_query_timeout != -1){
        rc = odbc_set_query_timeout(imp_dbh, imp_sth->hstmt, imp_sth->odbc_query_timeout);
        if (!SQL_SUCCEEDED(rc)) {
-           dbd_error(sth, rc, "set_query_timeout");
+           dbd_error(sth, rc, "st_prepare/set_query_timeout");
        }
        /* don't fail if the query timeout can't be set. */
    }
@@ -2420,7 +2431,7 @@ int dbd_describe(SV *sth, imp_sth_t *imp_sth, int more)
                 break;
             } else if (rc == SQL_SUCCESS_WITH_INFO) {
                 /* warn about an info returns */
-                dbd_error(sth, rc, "dbd_describe/SQLMoreResults");
+                dbd_error(sth, rc, "dbd_describe/SQLMoreResults_WITH_INFO");
             } else if (!SQL_SUCCEEDED(rc)) {
                 dbd_error(sth, rc, "dbd_describe/SQLMoreResults");
                 return 0;
@@ -2488,7 +2499,7 @@ int dbd_describe(SV *sth, imp_sth_t *imp_sth, int more)
                             &fbh->ColNullable);
 #endif /* WITH_UNICODE */
         if (!SQL_SUCCEEDED(rc)) {	/* should never fail */
-            dbd_error(sth, rc, "describe/SQLDescribeCol");
+            dbd_error(sth, rc, "dbd_describe/SQLDescribeCol");
             break;
         }
         fbh->ColName = cur_col_name;
@@ -2799,7 +2810,7 @@ static SQLRETURN bind_columns(
                             fbh->data,
                             fbh->ColDisplaySize, &fbh->datalen);
             if (!SQL_SUCCEEDED(rc)) {
-                dbd_error(h, rc, "describe/SQLBindCol");
+                dbd_error(h, rc, "bind_columns/SQLBindCol");
                 break;
             }
             /* Save the fact this column is now bound and hence the type
@@ -2866,9 +2877,10 @@ IV dbd_st_execute_iv(
         TRACE1(imp_dbh, "    +dbd_st_execute_iv(%p)\n", sth);
 
     if (SQL_NULL_HDBC == imp_dbh->hdbc) {
-        DBIh_SET_ERR_CHAR(sth, (imp_xxh_t*)imp_sth, Nullch, 1,
-                          "Database handle has been disconnected",
-                          Nullch, Nullch);
+        DBIh_SET_ERR_CHAR( sth, (imp_xxh_t*)imp_sth,
+                           DBI_ERR_i, 1,
+                           "Database handle has been disconnected", Nullch,
+                           "execute_iv" );
         return -2;
     }
 
@@ -3022,7 +3034,7 @@ IV dbd_st_execute_iv(
      * be some status msgs for us.
      */
     if (SQL_SUCCESS_WITH_INFO == rc) {
-        dbd_error(sth, rc, "st_execute/SQLExecute");
+        dbd_error(sth, rc, "st_execute/SQLExecute_WITH_INFO");
     }
 
     if (!SQL_SUCCEEDED(rc) && rc != SQL_NO_DATA) {
@@ -3124,7 +3136,7 @@ IV dbd_st_execute_iv(
         SQLRETURN sts;
 
         if (!SQL_SUCCEEDED(sts = SQLNumResultCols(imp_sth->hstmt, &flds))) {
-            dbd_error(sth, sts, "dbd_describe/SQLNumResultCols");
+            dbd_error(sth, sts, "st_execute/SQLNumResultCols");
             return -2;
         }
         if (DBIc_TRACE(imp_sth, DBD_TRACING, 0, 4))
@@ -3224,15 +3236,17 @@ AV *dbd_st_fetch(SV *sth, imp_sth_t *imp_sth)
     /* that dbd_describe() executed sucessfuly so the memory buffers	*/
     /* are allocated and bound.						*/
     if ( !DBIc_ACTIVE(imp_sth) ) {
-      /*dbd_error(sth, DBDODBC_INTERNAL_ERROR, "no select statement currently executing");*/
+      /*dbd_error(sth, DBDODBC_INTERNAL_ERROR, "st_fetch (no select statement currently executing)");*/
 	/* The following issues a warning (instead of the error above)
 	   when a selectall_* did not actually return a result-set e.g.,
 	   if someone passed a create table to selectall_*. There is some
 	   debate as to what should happen here.
 	   See http://www.nntp.perl.org/group/perl.dbi.dev/2011/06/msg6606.html
 	   and rt 68720  and rt_68720.t */
-        DBIh_SET_ERR_CHAR(sth, (imp_xxh_t*)imp_sth,
-		   "0", 0, "no select statement currently executing", "", "fetch");
+        DBIh_SET_ERR_CHAR( sth, (imp_xxh_t*)imp_sth,
+                           DBI_WARN_c, 0,
+                           "no select statement currently executing", "",
+                           "st_fetch" );
 
         return Nullav;
     }
@@ -3261,7 +3275,7 @@ AV *dbd_st_fetch(SV *sth, imp_sth_t *imp_sth)
                     TRACE1(imp_dbh, "    Getting more results: %d\n", rc);
 
                 if (rc == SQL_SUCCESS_WITH_INFO) {
-                    dbd_error(sth, rc, "st_fetch/SQLMoreResults");
+                    dbd_error(sth, rc, "st_fetch/SQLMoreResults_WITH_INFO");
                     /* imp_sth->moreResults = 0; */
                 }
                 if (SQL_SUCCEEDED(rc)){
@@ -3392,10 +3406,11 @@ AV *dbd_st_fetch(SV *sth, imp_sth_t *imp_sth)
                  * with SQL_ERROR explicitly instead.
                  */
 #ifdef COULD_DO_THIS
-                DBIh_SET_ERR_CHAR(
-                    sth, (imp_xxh_t*)imp_sth, Nullch, 1,
-                    "st_fetch/SQLFetch (long truncated DBI attribute LongTruncOk "
-                    "not set and/or LongReadLen too small)", Nullch, Nullch);
+                DBIh_SET_ERR_CHAR( sth, (imp_xxh_t*)imp_sth,
+                                   DBI_ERR_i, 1,
+                                   "long truncated DBI attribute LongTruncOk"
+                                   " not set and/or LongReadLen too small", Nullch,
+                                   "st_fetch/SQLFetch" );
 #endif
                 dbd_error(
                     sth, DBDODBC_INTERNAL_ERROR,
@@ -3515,16 +3530,20 @@ AV *dbd_st_fetch(SV *sth, imp_sth_t *imp_sth)
                 sprintf(errstr,
                         "over/under flow converting column %d to type %"IVdf"",
                         i+1, fbh->req_type);
-                DBIh_SET_ERR_CHAR(sth, (imp_xxh_t*)imp_sth, Nullch, 1,
-                                  errstr, Nullch, Nullch);
+                DBIh_SET_ERR_CHAR(sth, (imp_xxh_t*)imp_sth,
+                                  DBI_ERR_i, 1,
+                                  errstr, Nullch,
+                                  "st_fetch/sql_type_cast_svpv");
                 return Nullav;
             }
             else if (sts == -2) {
                 sprintf(errstr,
-                        "unsupported bind type %"IVdf" for column %d in sql_type_cast_svpv",
+                        "unsupported bind type %"IVdf" for column %d",
                         fbh->req_type, i+1);
-                DBIh_SET_ERR_CHAR(sth, (imp_xxh_t*)imp_sth, Nullch, 1,
-                                  errstr, Nullch, Nullch);
+                DBIh_SET_ERR_CHAR(sth, (imp_xxh_t*)imp_sth,
+                                  DBI_ERR_i, 1,
+                                  errstr, Nullch,
+                                  "st_fetch/sql_type_cast_svpv");
                 return Nullav;
             }
         }
@@ -3569,7 +3588,7 @@ int dbd_st_finish(SV *sth, imp_sth_t *imp_sth)
 
         rc = SQLFreeStmt(imp_sth->hstmt, SQL_CLOSE);/* TBD: 3.0 update */
         if (!SQL_SUCCEEDED(rc)) {
-            dbd_error(sth, rc, "finish/SQLFreeStmt(SQL_CLOSE)");
+            dbd_error(sth, rc, "finish/SQLFreeStmt(CLOSE)");
             return 0;
         }
         if (DBIc_TRACE(imp_sth, DBD_TRACING, 0, 6)) {
@@ -4356,10 +4375,10 @@ int dbd_st_bind_col(
     */
 
     if (imp_sth->fbh[field-1].bound && type && imp_sth->fbh[field-1].bound != type) {
-        DBIh_SET_ERR_CHAR(
-            sth, (imp_xxh_t*)imp_sth,
-            "0", 0, "you cannot change the bind column type after the column is bound",
-            "", "fetch");
+        DBIh_SET_ERR_CHAR( sth, (imp_xxh_t*)imp_sth,
+                           DBI_WARN_c, 0,
+                           "you cannot change the bind column type after the column is bound", "",
+                           "bind_col" );
         return 1;
     }
 
@@ -4451,9 +4470,10 @@ int dbd_bind_ph(
    SQLSMALLINT sql_type;
 
    if (SQL_NULL_HDBC == imp_dbh->hdbc) {
-       DBIh_SET_ERR_CHAR(sth, (imp_xxh_t*)imp_sth, Nullch, 1,
-                          "Database handle has been disconnected",
-                          Nullch, Nullch);
+       DBIh_SET_ERR_CHAR( sth, (imp_xxh_t*)imp_sth,
+                          DBI_ERR_i, 1,
+                          "Database handle has been disconnected", Nullch,
+                          "bind_ph" );
 		return -2;
 	}
 
@@ -4861,7 +4881,7 @@ int dbd_db_STORE_attrib(SV *dbh, imp_dbh_t *imp_dbh, SV *keysv, SV *valuesv)
                                    NULL, SQL_IS_POINTER);
 
             if (!SQL_SUCCEEDED(rc)) {
-                dbd_error(dbh, rc, "SQLSetConnectAttr for odbc_taf_callback");
+                dbd_error(dbh, rc, "SQLSetConnectAttr(REGISTER_TAF_CALLBACK)");
                 return FALSE;
             }
         } else if (!SvROK(valuesv) || (SvTYPE(SvRV(valuesv)) != SVt_PVCV)) {
@@ -4874,14 +4894,14 @@ int dbd_db_STORE_attrib(SV *dbh, imp_dbh_t *imp_dbh, SV *keysv, SV *valuesv)
                                    &taf_callback_wrapper, SQL_IS_POINTER);
 
             if (!SQL_SUCCEEDED(rc)) {
-                dbd_error(dbh, rc, "SQLSetConnectAttr for odbc_taf_callback");
+                dbd_error(dbh, rc, "SQLSetConnectAttr(REGISTER_TAF_CALLBACK)");
                 return FALSE;
             }
             /* Pass our dbh into the callback */
             rc = SQLSetConnectAttr(imp_dbh->hdbc, 1281 /*SQL_ATTR_REGISTER_TAF_HANDLE*/,
                                    dbh, SQL_IS_POINTER);
             if (!SQL_SUCCEEDED(rc)) {
-                dbd_error(dbh, rc, "SQLSetConnectAttr for odbc_taf_callback handle");
+                dbd_error(dbh, rc, "SQLSetConnectAttr(REGISTER_TAF_HANDLE)");
                 return FALSE;
             }
         }
@@ -5069,10 +5089,10 @@ int dbd_db_STORE_attrib(SV *dbh, imp_dbh_t *imp_dbh, SV *keysv, SV *valuesv)
             (void)SQLGetDiagRec(SQL_HANDLE_DBC, imp_dbh->hdbc, 1,
                                 (SQLCHAR *)state, &native, msg, sizeof(msg), &msg_len);
 
-            DBIh_SET_ERR_CHAR(
-                dbh, (imp_xxh_t*)imp_dbh, "0" /* warning state */, 1,
-                msg,
-                state, Nullch);
+            DBIh_SET_ERR_CHAR( dbh, (imp_xxh_t*)imp_dbh,
+                               DBI_WARN_c, 0,
+                               msg, state,
+                               "db_STORE_attrib/SQLSetConnectAttr_WITH_INFO" );
         }
 
         if (pars->fOption == SQL_ROWSET_SIZE)
@@ -5709,7 +5729,7 @@ int ftype;
                         rgbInfoValue, cbInfoValue, &cbInfoValue);
     }
     if (!SQL_SUCCEEDED(rc)) {
-        dbd_error(dbh, rc, "odbc_get_info/SQLGetInfo");
+        dbd_error(dbh, rc, "get_info/SQLGetInfo");
         Safefree(rgbInfoValue);
         /* patched 2/12/02, thanks to Steffen Goldner */
         return &PL_sv_undef;
@@ -5764,7 +5784,7 @@ int		 Unique;
 
     rc = SQLAllocHandle(SQL_HANDLE_STMT, imp_dbh->hdbc, &imp_sth->hstmt);
     if (rc != SQL_SUCCESS) {
-        dbd_error(sth, rc, "odbc_get_statistics/SQLAllocHandle(stmt)");
+        dbd_error(sth, rc, "get_statistics/SQLAllocHandle(stmt)");
         return 0;
     }
 
@@ -5777,7 +5797,7 @@ int		 Unique;
         TRACE1(imp_dbh, "    SQLStatistics=%d\n", rc);
 
     if (!SQL_SUCCEEDED(rc)) {
-        dbd_error(sth, rc, "odbc_get_statistics/SQLGetStatistics");
+        dbd_error(sth, rc, "get_statistics/SQLGetStatistics");
         return 0;
     }
     return build_results(aTHX_ sth, imp_sth, dbh, imp_dbh, rc);
@@ -5807,7 +5827,7 @@ char * TableName;
 
     rc = SQLAllocHandle(SQL_HANDLE_STMT, imp_dbh->hdbc, &imp_sth->hstmt);
     if (rc != SQL_SUCCESS) {
-        dbd_error(sth, rc, "odbc_get_primary_keys/SQLAllocHandle(stmt)");
+        dbd_error(sth, rc, "get_primary_keys/SQLAllocHandle(stmt)");
         return 0;
     }
 
@@ -5818,7 +5838,7 @@ char * TableName;
     if (DBIc_TRACE(imp_sth, DBD_TRACING, 0, 3))
         TRACE1(imp_dbh, "    SQLPrimaryKeys rc = %d\n", rc);
     if (!SQL_SUCCEEDED(rc)) {
-        dbd_error(sth, rc, "odbc_get_primary_keys/SQLPrimaryKeys");
+        dbd_error(sth, rc, "get_primary_keys/SQLPrimaryKeys");
         return 0;
     }
     return build_results(aTHX_ sth, imp_sth, dbh, imp_dbh, rc);
@@ -5852,7 +5872,7 @@ int    Nullable;
 
     rc = SQLAllocHandle(SQL_HANDLE_STMT, imp_dbh->hdbc, &imp_sth->hstmt);
     if (rc != SQL_SUCCESS) {
-        dbd_error(sth, rc, "odbc_get_special_columns/SQLAllocHandle(stmt)");
+        dbd_error(sth, rc, "get_special_columns/SQLAllocHandle(stmt)");
         return 0;
     }
 
@@ -5866,7 +5886,7 @@ int    Nullable;
         TRACE1(imp_dbh, "    SQLSpecialColumns=%d\n", rc);
 
     if (!SQL_SUCCEEDED(rc)) {
-        dbd_error(sth, rc, "odbc_get_special_columns/SQLSpecialClumns");
+        dbd_error(sth, rc, "get_special_columns/SQLSpecialClumns");
         return 0;
     }
     return build_results(aTHX_ sth, imp_sth, dbh, imp_dbh, rc);
@@ -5900,7 +5920,7 @@ char * FK_TableName;
 
     rc = SQLAllocHandle(SQL_HANDLE_STMT, imp_dbh->hdbc, &imp_sth->hstmt);
     if (rc != SQL_SUCCESS) {
-        dbd_error(sth, rc, "odbc_get_foreign_keys/SQLAllocHandle(stmt)");
+        dbd_error(sth, rc, "get_foreign_keys/SQLAllocHandle(stmt)");
         return 0;
     }
 
@@ -5937,7 +5957,7 @@ char * FK_TableName;
         TRACE1(imp_dbh, "    SQLForeignKeys=%d\n", rc);
 
     if (!SQL_SUCCEEDED(rc)) {
-        dbd_error(sth, rc, "odbc_get_foreign_keys/SQLForeignKeys");
+        dbd_error(sth, rc, "get_foreign_keys/SQLForeignKeys");
         return 0;
     }
     return build_results(aTHX_ sth, imp_sth, dbh, imp_dbh, rc);
@@ -5964,7 +5984,7 @@ int odbc_describe_col(
 		       ColumnName, BufferLength, NameLength,
 		       DataType, &ColSize, DecimalDigits, Nullable);
    if (!SQL_SUCCEEDED(rc)) {
-      dbd_error(sth, rc, "DescribeCol/SQLDescribeCol");
+      dbd_error(sth, rc, "describe_col/SQLDescribeCol");
       return 0;
    }
    *ColumnSize = (U32)ColSize;
@@ -6000,7 +6020,7 @@ int odbc_get_type_info(
 
    rc = SQLAllocHandle(SQL_HANDLE_STMT, imp_dbh->hdbc, &imp_sth->hstmt);
    if (rc != SQL_SUCCESS) {
-      dbd_error(sth, rc, "odbc_get_type_info/SQLAllocHandle(stmt)");
+      dbd_error(sth, rc, "get_type_info/SQLAllocHandle(stmt)");
       return 0;
    }
 
@@ -6018,7 +6038,7 @@ int odbc_get_type_info(
    if (DBIc_TRACE(imp_sth, DBD_TRACING, 0, 4))
        TRACE2(imp_dbh, "    SQLGetTypeInfo(%d)=%d\n", ftype, rc);
 
-   dbd_error(sth, rc, "odbc_get_type_info/SQLGetTypeInfo");
+   dbd_error(sth, rc, "get_type_info/SQLGetTypeInfo");
    if (!SQL_SUCCEEDED(rc)) {
       SQLFreeHandle(SQL_HANDLE_STMT,imp_sth->hstmt);
       imp_sth->hstmt = SQL_NULL_HSTMT;
@@ -6038,7 +6058,7 @@ SV *odbc_cancel(SV *sth)
 
     rc = SQLCancel(imp_sth->hstmt);
     if (!SQL_SUCCEEDED(rc)) {
-        dbd_error(sth, rc, "odbc_cancel/SQLCancel");
+        dbd_error(sth, rc, "cancel/SQLCancel");
         return Nullsv;
     }
     return newSViv(1);
@@ -6095,14 +6115,14 @@ IV odbc_st_lob_read(
            returned all of the data */
         return 0;
     } else if (!SQL_SUCCEEDED(rc)) {
-        dbd_error(sth, rc, "odbc_st_lob_read/SQLGetData");
+        dbd_error(sth, rc, "st_lob_read/SQLGetData");
         return -1;
     } else if (rc == SQL_SUCCESS_WITH_INFO) {
         /* we are assuming this is 01004 - string data right truncation
            unless len == SQL_NO_TOTAL */
         if (len == SQL_NO_TOTAL) {
             dbd_error(sth, rc,
-                      "Driver did not return the lob length - SQL_NO_TOTAL)");
+                      "st_lob_read/SQLGetData_NO_TOTAL (Driver did not return the lob length)");
             return -1;
         }
         retlen = length;
@@ -6158,7 +6178,7 @@ SV *odbc_col_attributes(SV *sth, int colno, int desctype)
     memset(str_attr, '\0', sizeof(str_attr));
 
     if ( !DBIc_ACTIVE(imp_sth) ) {
-        dbd_error(sth, DBDODBC_INTERNAL_ERROR, "no statement executing");
+        dbd_error(sth, DBDODBC_INTERNAL_ERROR, "col_attributes (no statement executing)");
         return Nullsv;
     }
 
@@ -6169,7 +6189,7 @@ SV *odbc_col_attributes(SV *sth, int colno, int desctype)
      */
     if (colno == 0) {
         dbd_error(sth, DBDODBC_INTERNAL_ERROR,
-                  "cannot obtain SQLColAttributes for column 0");
+                  "col_attributes (cannot obtain SQLColAttributes for column 0)");
         return Nullsv;
     }
 
@@ -6184,7 +6204,7 @@ SV *odbc_col_attributes(SV *sth, int colno, int desctype)
                           &str_attr_len, &num_attr);
 
     if (!SQL_SUCCEEDED(rc)) {
-        dbd_error(sth, rc, "odbc_col_attributes/SQLColAttributes");
+        dbd_error(sth, rc, "col_attributes/SQLColAttributes");
         return Nullsv;
     } else if (SQL_SUCCESS_WITH_INFO == rc) {
         warn("SQLColAttributes has truncated returned data");
@@ -6235,7 +6255,7 @@ SV *odbc_col_attributes(SV *sth, int colno, int desctype)
       default:
       {
           dbd_error(sth, DBDODBC_INTERNAL_ERROR,
-                    "driver-specific column attributes not supported");
+                    "col_attributes (driver-specific column attributes not supported)");
           return Nullsv;
           break;
       }
@@ -6295,7 +6315,7 @@ char *column;
 
     rc = SQLAllocHandle(SQL_HANDLE_STMT, imp_dbh->hdbc, &imp_sth->hstmt);
     if (rc != SQL_SUCCESS) {
-        dbd_error(sth, rc, "odbc_db_columns/SQLAllocHandle(stmt)");
+        dbd_error(sth, rc, "db_columns/SQLAllocHandle(stmt)");
         return 0;
     }
 
@@ -6326,7 +6346,7 @@ char *column;
             "column = %s\n",
             XXSAFECHAR(catalog), XXSAFECHAR(schema), XXSAFECHAR(table),
             XXSAFECHAR(column));
-    dbd_error(sth, rc, "odbc_columns/SQLColumns");
+    dbd_error(sth, rc, "db_columns/SQLColumns");
 
     if (!SQL_SUCCEEDED(rc)) {
         SQLFreeHandle(SQL_HANDLE_STMT,imp_sth->hstmt);
@@ -6365,7 +6385,7 @@ int odbc_db_columns(
 
     rc = SQLAllocHandle(SQL_HANDLE_STMT, imp_dbh->hdbc, &imp_sth->hstmt);
     if (rc != SQL_SUCCESS) {
-        dbd_error(sth, rc, "odbc_db_columns/SQLAllocHandle(stmt)");
+        dbd_error(sth, rc, "db_columns/SQLAllocHandle(stmt)");
         return 0;
     }
 
@@ -6441,7 +6461,7 @@ int odbc_db_columns(
             "column = %s\n",
             XXSAFECHAR(acatalog), XXSAFECHAR(aschema), XXSAFECHAR(atable),
             XXSAFECHAR(acolumn));
-    dbd_error(sth, rc, "odbc_columns/SQLColumns");
+    dbd_error(sth, rc, "db_columns/SQLColumns");
 
     if (!SQL_SUCCEEDED(rc)) {
         SQLFreeHandle(SQL_HANDLE_STMT,imp_sth->hstmt);
@@ -6513,10 +6533,10 @@ static int check_connection_active(pTHX_ SV *h)
     }
 
     if (!DBIc_ACTIVE(imp_dbh)) {
-        DBIh_SET_ERR_CHAR(
-            h, imp_xxh, Nullch, 1,
-            "Cannot allocate statement when disconnected from the database",
-            "08003", Nullch);
+        DBIh_SET_ERR_CHAR( h, imp_xxh,
+                           DBI_ERR_i, 1,
+                           "Cannot allocate statement when disconnected from the database", "08003",
+                           "check_connection_active" );
         return 0;
     }
     return 1;
@@ -6559,7 +6579,7 @@ static int set_odbc_version(
     }
     if (!SQL_SUCCEEDED(rc)) {
         dbd_error2(
-            dbh, rc, "db_login/SQLSetEnvAttr", imp_drh->henv, 0, 0);
+            dbh, rc, "set_odbc_version/SQLSetEnvAttr", imp_drh->henv, 0, 0);
         if (imp_drh->connects == 0) {
             SQLFreeHandle(SQL_HANDLE_ENV, imp_drh->henv);
             imp_drh->henv = SQL_NULL_HENV;
@@ -6607,7 +6627,7 @@ static int post_connect(
     rc = SQLSetConnectAttr(imp_dbh->hdbc, SQL_AUTOCOMMIT,
                            (SQLPOINTER)SQL_AUTOCOMMIT_ON, 0);
     if (!SQL_SUCCEEDED(rc)) {
-        dbd_error(dbh, rc, "post_connect/SQLSetConnectAttr(SQL_AUTOCOMMIT)");
+        dbd_error(dbh, rc, "post_connect/SQLSetConnectAttr(AUTOCOMMIT)");
         SQLFreeHandle(SQL_HANDLE_DBC, imp_dbh->hdbc);
         if (imp_drh->connects == 0) {
             SQLFreeHandle(SQL_HANDLE_ENV, imp_drh->henv);
@@ -6667,7 +6687,7 @@ static int post_connect(
                     &imp_dbh->odbc_driver_version,
                     (SQLSMALLINT)sizeof(imp_dbh->odbc_driver_version), &dbvlen);
     if (!SQL_SUCCEEDED(rc)) {
-        dbd_error(dbh, rc, "post_connect/SQLGetInfo(DRIVER_VERSION)");
+        dbd_error(dbh, rc, "post_connect/SQLGetInfo(DRIVER_VER)");
         strcpy(imp_dbh->odbc_driver_name, "unknown");
     }
     if (DBIc_TRACE(imp_dbh, CONNECTION_TRACING, 0, 0))
@@ -6676,14 +6696,14 @@ static int post_connect(
     rc = SQLGetInfo(imp_dbh->hdbc, SQL_DBMS_NAME, &imp_dbh->odbc_dbms_name,
                     (SQLSMALLINT)sizeof(imp_dbh->odbc_dbms_name), &dbvlen);
     if (!SQL_SUCCEEDED(rc)) {
-        dbd_error(dbh, rc, "post_connect/SQLGetInfo(SQL_DBMS_NAME)");
+        dbd_error(dbh, rc, "post_connect/SQLGetInfo(DBMS_NAME)");
         strcpy(imp_dbh->odbc_dbms_name, "unknown");
     }
 
     rc = SQLGetInfo(imp_dbh->hdbc, SQL_DBMS_VER, &imp_dbh->odbc_dbms_version,
                     (SQLSMALLINT)sizeof(imp_dbh->odbc_dbms_version), &dbvlen);
     if (!SQL_SUCCEEDED(rc)) {
-        dbd_error(dbh, rc, "post_connect/SQLGetInfo(SQL_DBMS_VER)");
+        dbd_error(dbh, rc, "post_connect/SQLGetInfo(DBMS_VER)");
         strcpy(imp_dbh->odbc_dbms_version, "unknown");
     }
 
@@ -6710,7 +6730,7 @@ static int post_connect(
                         yesno,
                         (SQLSMALLINT) sizeof(yesno), &dbvlen);
         if (!SQL_SUCCEEDED(rc)) {
-            dbd_error(dbh, rc, "post_connect/SQLGetInfo(SQL_CATALOG_NAME)");
+            dbd_error(dbh, rc, "post_connect/SQLGetInfo(CATALOG_NAME)");
             imp_dbh->catalogs_supported = 0;
         } else if (yesno[0] == 'Y') {
             imp_dbh->catalogs_supported = 1;
@@ -6728,7 +6748,7 @@ static int post_connect(
                         &imp_dbh->schema_usage,
                         (SQLSMALLINT) sizeof(imp_dbh->schema_usage), &dbvlen);
         if (!SQL_SUCCEEDED(rc)) {
-            dbd_error(dbh, rc, "post_connect/SQLGetInfo(SQL_SCHEMA_USAGE)");
+            dbd_error(dbh, rc, "post_connect/SQLGetInfo(SCHEMA_USAGE)");
             imp_dbh->schema_usage = 0;
         }
         if (DBIc_TRACE(imp_dbh, CONNECTION_TRACING, 0, 0))
@@ -6742,9 +6762,10 @@ static int post_connect(
 #endif
     if (imp_dbh->max_column_name_len > 512) {
         imp_dbh->max_column_name_len = 512;
-        DBIh_SET_ERR_CHAR(
-            dbh, (imp_xxh_t*)imp_drh, "0", 1,
-            "Max column name length pegged at 512", Nullch, Nullch);
+        DBIh_SET_ERR_CHAR( dbh, (imp_xxh_t*)imp_drh,
+                           DBI_WARN_c, 0,
+                           "Max column name length pegged at 512", Nullch,
+                           "post_connect" );
     }
 
     /* default ignoring named parameters and array operations to false */
@@ -7067,7 +7088,7 @@ IV odbc_st_rowcount(
     /*
     rc = SQLRowCount(imp_sth->hstmt, &rows);
     if (!SQL_SUCCEEDED(rc)) {
-        dbd_error(sth, rc, "odbc_st_rowcount");
+        dbd_error(sth, rc, "st_rowcount/SQLRowCount");
         return -1;
         }
         return rows;*/
@@ -7103,9 +7124,10 @@ IV odbc_st_execute_for_fetch(
                sth, count);
 
     if (SQL_NULL_HDBC == imp_dbh->hdbc) {
-        DBIh_SET_ERR_CHAR(sth, (imp_xxh_t*)imp_sth, Nullch, 1,
-                          "Database handle has been disconnected",
-                          Nullch, Nullch);
+        DBIh_SET_ERR_CHAR( sth, (imp_xxh_t*)imp_sth,
+                           DBI_ERR_i, 1,
+                           "Database handle has been disconnected", Nullch,
+                           "execute_for_fetch" );
         return -2;
     }
 
@@ -7137,7 +7159,7 @@ IV odbc_st_execute_for_fetch(
     dbd_st_finish(sth, imp_sth);;
     rc = SQLFreeStmt(imp_sth->hstmt, SQL_RESET_PARAMS);
     if (!SQL_SUCCEEDED(rc)) {
-        dbd_error(sth, rc, "odbc_st_execute_for_fetch/SQL_RESET_PARAMS");
+        dbd_error(sth, rc, "execute_for_fetch/SQLFreeStmt(RESET_PARAMS)");
         return -2;
     }
 
@@ -7149,7 +7171,7 @@ IV odbc_st_execute_for_fetch(
     rc = SQLSetStmtAttr(imp_sth->hstmt, SQL_ATTR_PARAM_BIND_TYPE,
                         (SQLPOINTER)SQL_PARAM_BIND_BY_COLUMN, 0);
     if (!SQL_SUCCEEDED(rc)) {
-        dbd_error(sth, rc, "odbc_st_execute_for_fetch/SQL_ATTR_PARAM_BIND_TYPE");
+        dbd_error(sth, rc, "execute_for_fetch/SQLSetStmtAttr(PARAM_BIND_TYPE)");
         return -2;
     }
 
@@ -7310,7 +7332,7 @@ IV odbc_st_execute_for_fetch(
 #endif
         if (!SQL_SUCCEEDED(rc)) {
             Safefree(maxlen);
-            dbd_error(sth, rc, "odbc_st_execute_for_fetch/SQLBindParameter");
+            dbd_error(sth, rc, "execute_for_fetch/SQLBindParameter");
             return -2;
         }
     }
@@ -7382,19 +7404,19 @@ IV odbc_st_execute_for_fetch(
     rc = SQLSetStmtAttr(imp_sth->hstmt, SQL_ATTR_PARAMSET_SIZE,
                         (SQLPOINTER)count, 0);
     if (!SQL_SUCCEEDED(rc)) {
-        dbd_error(sth, rc, "odbc_st_execute_for_fetch/SQL_ATTR_PARAMSET_SIZE");
+        dbd_error(sth, rc, "execute_for_fetch/SQLSetStmtAttr(PARAMSET_SIZE)");
         return -2;
     }
     rc = SQLSetStmtAttr(imp_sth->hstmt, SQL_ATTR_PARAMS_PROCESSED_PTR,
                         (SQLPOINTER)&imp_sth->params_processed, 0);
     if (!SQL_SUCCEEDED(rc)) {
-        dbd_error(sth, rc, "odbc_st_execute_for_fetch/SQL_ATTR_PARAMS_PROCESSED_PTR");
+        dbd_error(sth, rc, "execute_for_fetch/SQLSetStmtAttr(PARAMS_PROCESSED_PTR)");
         return -2;
     }
     rc = SQLSetStmtAttr(imp_sth->hstmt, SQL_ATTR_PARAM_STATUS_PTR,
                         (SQLPOINTER)imp_sth->param_status_array, 0);
     if (!SQL_SUCCEEDED(rc)) {
-        dbd_error(sth, rc, "odbc_st_execute_for_fetch/SQL_ATTR_PARAM_STATUS_PTR");
+        dbd_error(sth, rc, "execute_for_fetch/SQLSetStmtAttr(PARAM_STATUS_PTR)");
         return -2;
     }
 
@@ -7406,7 +7428,7 @@ IV odbc_st_execute_for_fetch(
     if (DBIc_TRACE(imp_sth, DBD_TRACING, 0, 4))
       TRACE1(imp_sth, "    SQLExecute=%d\n", rc);
     if (!SQL_SUCCEEDED(rc)) {
-        dbd_error(sth, rc, "odbc_st_execute_for_fetch/SQLExecute");
+        dbd_error(sth, rc, "execute_for_fetch/SQLExecute");
         /* reset paramset size and params processed */
         SQLSetStmtAttr(imp_sth->hstmt, SQL_ATTR_PARAMS_PROCESSED_PTR,
                        (SQLPOINTER)NULL, 0);
@@ -7416,7 +7438,7 @@ IV odbc_st_execute_for_fetch(
                        (SQLPOINTER)NULL, 0);
         return -2;
     } else if (rc == SQL_SUCCESS_WITH_INFO) {
-        dbd_error(sth, rc, "odbc_st_execute_for_fetch/SQLExecute");
+        dbd_error(sth, rc, "execute_for_fetch/SQLExecute_WITH_INFO");
     }
 
     if (DBIc_TRACE(imp_sth, DBD_TRACING, 0, 4))
@@ -7452,16 +7474,17 @@ IV odbc_st_execute_for_fetch(
                          newSViv((IV) -1));
             } else if (imp_sth->param_status_array[row] == 9999) {
                 SV *err_svs[3];
+                err_svs[0] = newSViv((IV)1);
+                err_svs[1] = newSVpv("warning: parameter status was not returned", 0);
+                err_svs[2] = newSVpv("HY000", 0);
                 if (SvTRUE(tuple_status)){
-                    err_svs[0] = newSViv((IV)1);
-                    err_svs[1] = newSVpv("warning: parameter status was not returned", 0);
-                    err_svs[2] = newSVpv("HY000", 0);
-
                     av_store(tuples_status_av, row,
                              newRV_noinc((SV *)(av_make(3, err_svs))));
                 }
-                DBIh_SET_ERR_SV(sth, (imp_xxh_t*)imp_sth, newSVpv("",0), err_svs[1],
-                                err_svs[2], &PL_sv_undef);
+                DBIh_SET_ERR_SV( sth, (imp_xxh_t*)imp_sth,
+                                 newSVpv(DBI_INFO_c,0),
+                                 err_svs[1], err_svs[2],
+                                 newSVpv("execute_for_fetch", 0) );
 
             } else if ((imp_sth->param_status_array[row] == SQL_PARAM_SUCCESS) ||
                        (imp_sth->param_status_array[row] == SQL_PARAM_UNUSED) ||
@@ -7504,8 +7527,10 @@ IV odbc_st_execute_for_fetch(
                     av_store(tuples_status_av, row,
                              newRV_noinc((SV *)(av_make(3, err_svs))));
                 }
-                DBIh_SET_ERR_CHAR(sth, (imp_xxh_t*)imp_sth, Nullch, 1, msg,
-                                  sqlstate, Nullch);
+                DBIh_SET_ERR_CHAR( sth, (imp_xxh_t*)imp_sth,
+                                   DBI_ERR_i, 1,
+                                   msg, sqlstate,
+                                   "execute_for_fetch/store_diag" );
                 err_seen++;
             }
         }
@@ -7528,7 +7553,7 @@ IV odbc_st_execute_for_fetch(
            leave this for other execute_for_fetches */
         /*safefree(phs->strlen_or_ind_array);*/
         /*phs->strlen_or_ind_array = NULL;*/
-        dbd_error(sth, rc, "odbc_st_execute_for_fetch/SQLRowCount");
+        dbd_error(sth, rc, "execute_for_fetch/SQLRowCount");
         return -2;
     }
     DBIc_ROW_COUNT(imp_sth) = imp_sth->RowCount;
