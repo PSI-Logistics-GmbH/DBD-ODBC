@@ -7112,7 +7112,7 @@ IV odbc_st_execute_for_fetch(
     D_imp_sth(sth);
     D_imp_dbh_from_sth;
     SQLRETURN rc;
-    AV *tuples_av, *tuples_status_av; /* array ptrs for tuples and tuple_status */
+    AV *tuples_av, *tuple_status_av; /* array ptrs for tuples and tuple_status */
     unsigned int p;		      /* for loop through parameters */
     unsigned long *maxlen;	/* array to store max size of each param */
     int n_params;		/* number of parameters */
@@ -7138,16 +7138,14 @@ IV odbc_st_execute_for_fetch(
     }
     tuples_av = (AV*)SvRV(tuples);
 
-    /* Check the `tuples_status' parameter. */
+    /* Check the `tuple_status' parameter. */
+    tuple_status_av = NULL;
     if(SvTRUE(tuple_status)) {
         if(!SvROK(tuple_status) || SvTYPE(SvRV(tuple_status)) != SVt_PVAV) {
-            croak("odbc_st_execute_for_fetch(): tuples_status not an array reference.");
+            croak("odbc_st_execute_for_fetch(): tuple_status not an array reference.");
         }
-        tuples_status_av = (AV*)SvRV(tuple_status);
-        av_fill(tuples_status_av, count - 1);
-
-    } else {
-        tuples_status_av = NULL;
+        tuple_status_av = (AV*)SvRV(tuple_status);
+        av_fill(tuple_status_av, count - 1);
     }
 
     /* Nothing to do if no tuples. */
@@ -7227,7 +7225,7 @@ IV odbc_st_execute_for_fetch(
         AV *av;
 
         if (SvTRUE(tuple_status)){
-            av_store(tuples_status_av, row, newSViv((IV)-1)); /* don't know count */
+            av_store(tuple_status_av, row, newSViv((IV)-1)); /* don't know count */
         }
         sv_p = av_fetch(tuples_av, row, 0);
         if(sv_p == NULL) {
@@ -7471,7 +7469,7 @@ IV odbc_st_execute_for_fetch(
             if (imp_sth->params_processed <= row) {
                 /* parameter was not processed so no point in looking at parameter
                    status array */
-                av_store(tuples_status_av, row,
+                av_store(tuple_status_av, row,
                          newSViv((IV) -1));
             } else if (imp_sth->param_status_array[row] == 9999) {
                 SV *err_svs[3];
@@ -7479,7 +7477,7 @@ IV odbc_st_execute_for_fetch(
                 err_svs[1] = newSVpv("warning: parameter status was not returned", 0);
                 err_svs[2] = newSVpv("HY000", 0);
                 if (SvTRUE(tuple_status)){
-                    av_store(tuples_status_av, row,
+                    av_store(tuple_status_av, row,
                              newRV_noinc((SV *)(av_make(3, err_svs))));
                 }
                 DBIh_SET_ERR_SV( sth, (imp_xxh_t*)imp_sth,
@@ -7501,9 +7499,9 @@ IV odbc_st_execute_for_fetch(
                  * to return SQL_PARAM_SUCCES/SQL_PARAM_UNUSED - obviously any rows in
                  * error were executed. The code above needs to translate ODBC statuses.*/
                 if (SvTRUE(tuple_status)){
-                    av_store(tuples_status_av, row,
+                    av_store(tuple_status_av, row,
                              newSViv((IV) imp_sth->param_status_array[row]));
-                    /*av_store(tuples_status_av, row, newSViv((IV)-1));*/
+                    /*av_store(tuple_status_av, row, newSViv((IV)-1));*/
                 }
             } else {		/* SQL_PARAM_ERROR or SQL_PARAM_SUCCESS_WITH_INFO */
                 SV *err_svs[3];
@@ -7525,7 +7523,7 @@ IV odbc_st_execute_for_fetch(
                     err_svs[1] = newSVpv(msg, 0);
                     err_svs[2] = newSVpv(sqlstate, 0);
 
-                    av_store(tuples_status_av, row,
+                    av_store(tuple_status_av, row,
                              newRV_noinc((SV *)(av_make(3, err_svs))));
                 }
                 DBIh_SET_ERR_CHAR( sth, (imp_xxh_t*)imp_sth,
