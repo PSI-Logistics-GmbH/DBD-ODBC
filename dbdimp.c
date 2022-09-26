@@ -1394,31 +1394,35 @@ void dbd_error2(
         SQLINTEGER NativeError;
         RETCODE rc = 0;
 
-        /* TBD: 3.0 update */
-        /* It is important we check for DBDODBC_INTERNAL_ERROR first so if we issue
-         * an internal error AND there are ODBC diagnostics, ours come first */
-        while(err_rc == DBDODBC_INTERNAL_ERROR ||
-              SQL_SUCCEEDED(rc=SQLError(
-                                henv, hdbc, hstmt,
-                                sqlstate, &NativeError,
-                                ErrorMsg, sizeof(ErrorMsg)-1, &ErrorMsgLen))) {
-
-            error_found = 1;
+        while ( TRUE ) {
+            /* TBD: 3.0 update */
+            /* It is important we check for DBDODBC_INTERNAL_ERROR first so if we issue
+             * an internal error AND there are ODBC diagnostics, ours come first */
             if (err_rc == DBDODBC_INTERNAL_ERROR) {
                 strcpy(ErrorMsg, what);
                 strcpy(sqlstate, "HY000");
                 NativeError = 1;
                 err_rc = SQL_ERROR;
+                what = "dbd_INTERNAL_error";
             } else {
+                rc = SQLError( henv, hdbc, hstmt,
+                               sqlstate, &NativeError,
+                               ErrorMsg, sizeof(ErrorMsg)-1, &ErrorMsgLen );
+                if ( ! SQL_SUCCEEDED(rc) ) {
+                    break;
+                }
+
                 ErrorMsg[ErrorMsgLen] = '\0';
                 sqlstate[SQL_SQLSTATE_SIZE] = '\0';
             }
+
+            error_found = 1;
             if (DBIc_TRACE(imp_dbh, DBD_TRACING, 0, 3)) {
                 PerlIO_printf(DBIc_LOGPIO(imp_dbh),
                               "    !SQLError(%p,%p,%p) = "
                               "(%s, %ld, %s)\n",
-                              henv, hdbc, hstmt, sqlstate,
-                              (long)NativeError, ErrorMsg);
+                              henv, hdbc, hstmt,
+                              sqlstate, (long)NativeError, ErrorMsg);
             }
 
             /*
@@ -1469,14 +1473,10 @@ void dbd_error2(
             strcat(ErrorMsg, " (SQL-");
             strcat(ErrorMsg, sqlstate);
             strcat(ErrorMsg, ")");
-            if (SQL_SUCCEEDED(err_rc)) {
-                DBIh_SET_ERR_CHAR(h, imp_xxh, DBI_INFO_c,
-                                  1, ErrorMsg, sqlstate, what);
-            } else {
-                DBIh_SET_ERR_CHAR(h, imp_xxh, DBI_ERR_i,
-                                  1, ErrorMsg, sqlstate, what);
-            }
-            continue;
+            DBIh_SET_ERR_CHAR( h, imp_xxh,
+                               SQL_SUCCEEDED(err_rc) ? DBI_INFO_c : DBI_ERR_i, NativeError,
+                               ErrorMsg, sqlstate,
+                               what );
         }
         if (rc != SQL_NO_DATA_FOUND) {	/* should never happen */
             if (DBIc_TRACE(imp_xxh, DBD_TRACING, 0, 3))
@@ -1489,10 +1489,10 @@ void dbd_error2(
                                    what );
             }
         }
-        /* climb up the tree each time round the loop		*/
-        if (hstmt != SQL_NULL_HSTMT) hstmt = SQL_NULL_HSTMT;
-        else if (hdbc  != SQL_NULL_HDBC)  hdbc  = SQL_NULL_HDBC;
-        else henv = SQL_NULL_HENV;	/* done the top		*/
+        /* climb up the tree each time round the loop */
+        /**/ if (hstmt != SQL_NULL_HSTMT) hstmt = SQL_NULL_HSTMT;
+        else if (hdbc  != SQL_NULL_HDBC ) hdbc  = SQL_NULL_HDBC ;
+        else                              henv  = SQL_NULL_HENV ;	/* done the top */
     }
     /* some broken drivers may return an error and then not provide an
        error message */
@@ -6492,7 +6492,7 @@ static void AllODBCErrors(
         /* ErrorMsg must not be greater than SQL_MAX_MESSAGE_LENGTH */
         UCHAR ErrorMsg[SQL_MAX_MESSAGE_LENGTH];
         SWORD ErrorMsgLen;
-        SDWORD NativeError;
+        SQLINTEGER NativeError;
 
         /* TBD: 3.0 update */
         rc=SQLError(henv, hdbc, hstmt,
@@ -6500,7 +6500,8 @@ static void AllODBCErrors(
                     ErrorMsg, sizeof(ErrorMsg)-1, &ErrorMsgLen);
 
         if (output && SQL_SUCCEEDED(rc))
-            PerlIO_printf(logfp, "%s %s\n", sqlstate, ErrorMsg);
+            PerlIO_printf(logfp, "!SQLError = (%s, %ld, %s)\n",
+                          sqlstate, (long)NativeError, ErrorMsg);
 
     } while(SQL_SUCCEEDED(rc));
     return;
