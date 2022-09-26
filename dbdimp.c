@@ -95,12 +95,7 @@ static int taf_callback_wrapper (
     void *handle,
     int type,
     int event);
-static int get_row_diag(SQLSMALLINT recno,
-			imp_sth_t *imp_sth,
-			char *state,
-			SQLINTEGER *native,
-			char *msg,
-			size_t max_msg);
+static IV store_diag(SV* sth, AV* tuple_status_av, IV count);
 static SQLSMALLINT default_parameter_type(
     char *why, imp_sth_t *imp_sth, phs_t *phs);
 static int post_connect(pTHX_ SV *dbh, imp_dbh_t *imp_dbh, SV *attr);
@@ -7446,9 +7441,10 @@ IV odbc_st_execute_for_fetch(
 
     {
         unsigned int row;
-        char sqlstate[SQL_SQLSTATE_SIZE+1];
-        SQLINTEGER native;
-        char msg[256];
+
+        if (SvTRUE(tuple_status)){
+            store_diag(sth, tuple_status_av, count);
+        }
 
         /* NOTE, DBI says we fill tuple_status for each row with what execute
            returns - i.e., row count. It makes more sense for ODBC to fill
@@ -7465,13 +7461,13 @@ IV odbc_st_execute_for_fetch(
         for (row = 0; row < count; row++) {
             if (DBIc_TRACE(imp_sth, DBD_TRACING, 0, 3))
                 TRACE2(imp_sth, "    row %d, parameter status = %u\n",
-                       row, imp_sth->param_status_array[row]);
+                       row+1, imp_sth->param_status_array[row]);
             if (imp_sth->params_processed <= row) {
                 /* parameter was not processed so no point in looking at parameter
                    status array */
-                av_store(tuple_status_av, row,
-                         newSViv((IV) -1));
-            } else if (imp_sth->param_status_array[row] == 9999) {
+                continue;
+            }
+            if (imp_sth->param_status_array[row] == 9999) {
                 SV *err_svs[3];
                 err_svs[0] = newSViv((IV)1);
                 err_svs[1] = newSVpv("warning: parameter status was not returned", 0);
@@ -7484,10 +7480,11 @@ IV odbc_st_execute_for_fetch(
                                  newSVpv(DBI_INFO_c,0),
                                  err_svs[1], err_svs[2],
                                  newSVpv("execute_for_fetch", 0) );
-
-            } else if ((imp_sth->param_status_array[row] == SQL_PARAM_SUCCESS) ||
-                       (imp_sth->param_status_array[row] == SQL_PARAM_UNUSED) ||
-                       (imp_sth->param_status_array[row] == SQL_PARAM_DIAG_UNAVAILABLE)) {
+                continue;
+            }
+            if ((imp_sth->param_status_array[row] == SQL_PARAM_SUCCESS) ||
+                (imp_sth->param_status_array[row] == SQL_PARAM_UNUSED) ||
+                (imp_sth->param_status_array[row] == SQL_PARAM_DIAG_UNAVAILABLE)) {
                 /* We'll never get SQL_PARAM_IGNORE as we never set a row operations array */
                 /* Some drivers which do SQL_PARC_NO_BATCH will set
                    SQL_PARAM_DIAG_UNAVAILABLE for every row as they cannot tell
@@ -7501,37 +7498,39 @@ IV odbc_st_execute_for_fetch(
                 if (SvTRUE(tuple_status)){
                     av_store(tuple_status_av, row,
                              newSViv((IV) imp_sth->param_status_array[row]));
-                    /*av_store(tuple_status_av, row, newSViv((IV)-1));*/
+                    // NOTE: sub DBD::ODBC::st::execute_for_fetch(...) in ODBC.pm
+                    // set all non ref-values = -1;	# we don't know individual row counts
                 }
-            } else {		/* SQL_PARAM_ERROR or SQL_PARAM_SUCCESS_WITH_INFO */
-                SV *err_svs[3];
-                int found;
-
-                /* Some drivers won't support SQL_DIAG_ROW_NUMBER so we cannot be sure
-                   which diag relates to which row. 'found' tells us if we found a diag
-                   for row 'row+1' but in any case what can we do if we don't - so we
-                   just report whatever diag we have */
-                found = get_row_diag(row+1,
-                                     imp_sth,
-                                     sqlstate,
-                                     &native,
-                                     msg,
-                                     sizeof(msg));
-
-                if (SvTRUE(tuple_status)){
-                    err_svs[0] = newSViv((IV)native);
-                    err_svs[1] = newSVpv(msg, 0);
-                    err_svs[2] = newSVpv(sqlstate, 0);
-
-                    av_store(tuple_status_av, row,
-                             newRV_noinc((SV *)(av_make(3, err_svs))));
-                }
-                DBIh_SET_ERR_CHAR( sth, (imp_xxh_t*)imp_sth,
-                                   DBI_ERR_i, 1,
-                                   msg, sqlstate,
-                                   "execute_for_fetch/store_diag" );
-                err_seen++;
+                continue;
             }
+			/* SQL_PARAM_ERROR or SQL_PARAM_SUCCESS_WITH_INFO */
+			++err_seen;
+
+			bool status_set = ( SvROK(*av_fetch(tuple_status_av, row, 0)) != 0 );
+			if ( status_set )
+				continue;
+
+			/* Some drivers won't support SQL_DIAG_ROW_NUMBER so we cannot be sure
+			   which diag relates to which row. '!ref' tells us if we didn't found
+			   a diag for row but in any case what can we do if we don't - so we
+			   just report whatever diag we have */
+			/*
+			 * Also, if SQLGetDiagRec fails we fill state, native, msg with values
+			 * saying so so you can rely on the fact state, native and msg are at
+			 * least set.
+			 */
+			SV* err_svs[3];
+			err_svs[0] = newSViv((IV)1);
+			err_svs[1] = newSVpv("failed to retrieve diags", 0);
+			err_svs[2] = newSVpv("HY000", 0);
+			if (SvTRUE(tuple_status)){
+				av_store(tuple_status_av, row,
+				         newRV_noinc((SV*)(av_make(3, err_svs))));
+			}
+			DBIh_SET_ERR_SV( sth, (imp_xxh_t*)imp_sth,
+			                 newSVpv("1", 0),
+			                 err_svs[1], err_svs[2],
+			                 newSVpv("execute_for_fetch/store_diag", 0) );
         }
     }
 
@@ -7566,7 +7565,7 @@ IV odbc_st_execute_for_fetch(
 }
 
 /*
- * get_row_diag
+ * store_diag
  *
  * When we are doing execute_for_fetch/execute_array we bind rows of
  * parameters. When one or more fail we have a list of diagnostics and
@@ -7577,26 +7576,23 @@ IV odbc_st_execute_for_fetch(
  * diag 2 01000, 2290136, [Microsoft][ODBC SQL Server Driver][SQL Server]The statement has been terminated.
  *
  * Fortunately for us, each diagnostic contains the row number the error relates
- * to (in working drivers). This function is passed the row we have detected
- * in error and attempts to find the relevant error - it always returns the
- * first error (if there is more than one).
+ * to (in working drivers). This function is passed the status array and attempts
+ * to find the relevant error for each row - it always stores the first error
+ * (if there is more than one for the same row).
  *
- * We return 1 if any error for the supplied recno is found else 0
- * Also, if SQLGetDiagRec fails we fill state, native, msg with a values saying so
- * so you can rely on the fact state, native and msg are at least set.
+ * We return the number of rows with errors.
  */
-static int get_row_diag(SQLSMALLINT recno,
-                        imp_sth_t *imp_sth,
-                        char *state,
-                        SQLINTEGER *native,
-                        char *msg,
-                        size_t max_msg) {
-    SQLSMALLINT i = 1;
-    SQLRETURN rc;
-    SQLSMALLINT msg_len;
+static IV store_diag(SV* sth, AV* tuple_status_av, IV count) {
+	dTHX;
+	D_imp_sth(sth);
+	IV err_count = 0;
 
-    if (DBIc_TRACE(imp_sth, DBD_TRACING, 0, 3))
-        TRACE1(imp_sth, "    +get_row_diag for row %d\n", recno);
+	SQLSMALLINT recno;
+	SQLRETURN rc;
+	SQLSMALLINT msg_len;
+
+	if (DBIc_TRACE(imp_sth, DBD_TRACING, 0, 3))
+		TRACE1(imp_sth, "    +store_diag for %d rows\n", count);
 
     /*
       SQLRETURN return_code;
@@ -7610,52 +7606,82 @@ static int get_row_diag(SQLSMALLINT recno,
       NULL);
       printf("return code = %d\n", return_code);
     */
-    while(SQL_SUCCEEDED(rc = SQLGetDiagRec(SQL_HANDLE_STMT, imp_sth->hstmt, i,
-                                           state, native, msg, max_msg, &msg_len))) {
-        /*SQLINTEGER col;*/
-        SQLLEN row;
+
+	char sqlstate[SQL_SQLSTATE_SIZE+1];
+	SQLINTEGER native;
+	char msg[256];
+
+	for ( recno = 0; ++recno; ) {			/* next record */
+		rc = SQLGetDiagRec(SQL_HANDLE_STMT, imp_sth->hstmt, recno,
+		                   sqlstate, &native, msg, sizeof(msg), &msg_len);
+		/* will be SQL_NO_DATA if we reach the end of diags */
+		if ( ! SQL_SUCCEEDED(rc) )
+			return err_count;
+
         if (DBIc_TRACE(imp_sth, DBD_TRACING, 0, 3))
             PerlIO_printf(DBIc_LOGPIO(imp_sth),
                           "    diag %d %s, %ld, %s\n",
-                          i, state, (long)*native, msg);
-        if (max_msg < 100) {
-            croak("Come on, code needs some space to put the diag message");
-        }
+                          recno, sqlstate, (long)native, msg);
 
+        SQLLEN rowno;
         rc = SQLGetDiagField(SQL_HANDLE_STMT,
                              imp_sth->hstmt,
-                             i,
+                             recno,
                              SQL_DIAG_ROW_NUMBER,
-                             &row,
+                             &rowno,
                              0,
                              NULL);
-        if (SQL_SUCCEEDED(rc)) {
+		if ( ! SQL_SUCCEEDED(rc) ) {
 	    /* Could return SQL_ROW_NUMBER_UNKNOWN or SQL_NO_ROW_NUMBER */
-            if (DBIc_TRACE(imp_sth, DBD_TRACING, 0, 3))
-                PerlIO_printf(DBIc_LOGPIO(imp_sth), "     diag row=%ld\n", row);
+			if (DBIc_TRACE(imp_sth, DBD_TRACING, 0, 3))
+				TRACE0(imp_sth, "SQLGetDiagField for SQL_DIAG_ROW_NUMBER failed\n");
+			continue;
+		}
+
+        /*SQLINTEGER colno;*/
 	    /* few drivers support SQL_DIAG_COLUMN_NUMBER - most return -1 unfortunately
 	    rc = SQLGetDiagField(SQL_HANDLE_STMT,
 				 imp_sth->hstmt,
-				 i,
+				 recno,
 				 SQL_DIAG_COLUMN_NUMBER,
-				 &col,
+				 &colno,
 				 0,
 				 NULL);
-				 printf("  row %d col %ld\n", row, col); */
-            if (row == (SQLLEN)recno) return 1;
-        } else if (DBIc_TRACE(imp_sth, DBD_TRACING, 0, 3)) {
-            TRACE0(imp_sth, "SQLGetDiagField for SQL_DIAG_ROW_NUMBER failed");
-        }
-        i++;			/* next record */
-    };
-    /* will be SQL_NO_DATA if we reach the end of diags without finding anything */
-    /* TO_DO some drivers are not going to support SQL_DIAG_COLUMN_NUMBER
-       so we should do better than below - maybe show the first/last error */
-    strcpy(state, "HY000");
-    *native = 1;
-    strcpy(msg, "failed to retrieve diags");
-    return 0;
+				 printf("  rowno %d colno %ld\n", rowno, colno); */
+		/* TO_DO some drivers are not going to support SQL_DIAG_COLUMN_NUMBER
+		   so we should do better - maybe show the first/last error */
 
+		SQLLEN row = rowno - 1;
+		if ( row < 0 || count <= row ) {
+			char errstr[256];
+			sprintf( errstr,
+			         "ROW_NUMBER %d out of bounds",
+			         rowno );
+			DBIh_SET_ERR_CHAR( sth, (imp_xxh_t*)imp_sth,
+				DBI_ERR_i, 1,
+				errstr, Nullch,
+				"store_diag/SQLGetDiagField(SQL_DIAG_ROW_NUMBER)" );
+			continue;
+		}
+
+		bool status_set = ( SvROK(*av_fetch(tuple_status_av, row, 0)) != 0 );
+		if (DBIc_TRACE(imp_sth, DBD_TRACING, 0, 3))
+			TRACE2(imp_sth, "     diag rowno=%ld %s\n", rowno,
+			       status_set ? "already set!" : "still empty");
+		if ( status_set )
+			continue;
+
+		SV* err_svs[3];
+
+		err_svs[0] = newSViv((IV)native);
+		err_svs[1] = newSVpv(msg     , 0);
+		err_svs[2] = newSVpv(sqlstate, 0);
+
+		av_store(tuple_status_av, row,
+		         newRV_noinc((SV*)(av_make(3, err_svs))));
+
+		++err_count;
+	}
 }
 
 
